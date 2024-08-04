@@ -26,8 +26,6 @@ u8 ina226_init(void) {
   buff[1] = (uint16_t)ina226_calibration >> 8;
   buff[2] = (uint16_t)ina226_calibration & 0xff;
   err = i2c_send(INA226_I2C_ADDR, buff, 3);
-  printf("ina226_current_lsb: %ld\n",
-         (int32_t)(ina226_current_lsb * 1000.0 * 1000.0));
 
   return err;
 }
@@ -38,7 +36,6 @@ u8 ina226_shunt_voltage(float *voltage) {
   err = i2c_recv(INA226_I2C_ADDR, INA226_REGISTER_SHUNT_VOLTAGE, buff, 2);
   int16_t raw = buff[0] << 8 | buff[1];
 
-  printf("ina226_shunt_voltage: %d\n", raw);
   *voltage = (float)raw * 2.5;
 
   return err;
@@ -50,7 +47,6 @@ u8 ina226_read_voltage(float *voltage) {
   err = i2c_recv(INA226_I2C_ADDR, INA226_REGISTER_BUS_VOLTAGE, buff, 2);
   int16_t raw = buff[0] << 8 | buff[1];
 
-  //   printf("ina226_read_voltage: %d\n", raw);
   *voltage = (float)raw * 1.25 / 1000.0;
 
   return err;
@@ -62,7 +58,6 @@ u8 ina226_read_current(float *current) {
   err = i2c_recv(INA226_I2C_ADDR, INA226_REGISTER_CURRENT, buff, 2);
   int16_t raw = buff[0] << 8 | buff[1];
 
-  printf("ina226_read_current: %d\n", raw);
   *current = (float)raw * ina226_current_lsb;
 
   return err;
@@ -74,7 +69,6 @@ u8 ina226_read_power(float *power) {
   err = i2c_recv(INA226_I2C_ADDR, INA226_REGISTER_POWER, buff, 2);
   int16_t raw = buff[0] << 8 | buff[1];
 
-  printf("ina226_read_power: %d\n", raw);
   *power = (float)raw * ina226_current_lsb * 25.0;
 
   return err;

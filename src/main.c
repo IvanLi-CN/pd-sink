@@ -10,47 +10,82 @@
 #include "ina226.h"
 #include "st7735.h"
 
+#define LONG_PRESS_TIME_MS 500
+#define PRESS_THRESHOLD_MS 10
+// seconds * 24MHz = ticks
+#define LONG_PRESS_TIME_TICKS \
+  ((uint32_t)LONG_PRESS_TIME_MS * (uint32_t)24 * (uint32_t)1000)
+#define PRESS_THRESHOLD_TICKS \
+  ((uint32_t)PRESS_THRESHOLD_MS * (uint32_t)24 * (uint32_t)1000)
+
+#define BTN_A_RELEASED() (btn_a_press_start == 0)
+#define BTN_B_RELEASED() (btn_b_press_start == 0)
+
+typedef enum {
+  btn_a = 0,
+  btn_b,
+} btn_t;
+
 u8 float_to_string(float num, char *str, u8 afterpoint);
+u8 request_src_pdo(HUSB238_SrcPdo src_pdo);
+void EXTI7_0_IRQHandler(void) __attribute__((interrupt));
+void handle_btn_state_change(btn_t btn);
 
-int main() {
+uint32_t btn_a_press_start = 0;
+uint32_t btn_b_press_start = 0;
+uint32_t btn_a_press_duration = 0;
+uint32_t btn_b_press_duration = 0;
+
+void EXTI7_0_IRQHandler(void) {
+  printf("GPIOA->INDR: %02lx\n", GPIOA->INDR);
+  if (EXTI->INTFR & EXTI_Line1) {
+    if ((GPIOA->INDR & GPIO_Pin_1) == 0) {
+      // Btn A is pressed
+      btn_a_press_start = SysTick->CNT;
+    } else {
+      // Btn A is released
+      btn_a_press_duration = SysTick->CNT - btn_a_press_start;
+      btn_a_press_start = 0;
+    }
+    handle_btn_state_change(btn_a);
+    // Acknowledge the interrupt
+    EXTI->INTFR = EXTI_Line1;
+  } else if (EXTI->INTFR & EXTI_Line2) {
+    if ((GPIOA->INDR & GPIO_Pin_2) == 0) {
+      // Btn B is pressed
+      btn_b_press_start = SysTick->CNT;
+    } else {
+      // Btn B is released
+      btn_b_press_duration = SysTick->CNT - btn_b_press_start;
+      btn_b_press_start = 0;
+    }
+    handle_btn_state_change(btn_b);
+    // Acknowledge the interrupt
+    EXTI->INTFR = EXTI_Line2;
+  }
+}
+
+void handle_btn_state_change(btn_t btn) {
+  if (btn == btn_a && BTN_A_RELEASED()) {
+    if (btn_a_press_duration > LONG_PRESS_TIME_TICKS) {
+      printf("Btn A long pressed for %lu ms\n", btn_a_press_duration / 24000);
+    } else if (btn_a_press_duration > PRESS_THRESHOLD_TICKS) {
+      printf("Btn A short pressed for %lu ms\n", btn_a_press_duration / 24000);
+    }
+  } else if (btn == btn_b && BTN_B_RELEASED()) {
+    if (btn_b_press_duration > LONG_PRESS_TIME_TICKS) {
+      printf("Btn B long pressed for %lu ms\n", btn_b_press_duration / 24000);
+    } else if (btn_b_press_duration > PRESS_THRESHOLD_TICKS) {
+      printf("Btn B short pressed for %lu ms\n", btn_b_press_duration / 24000);
+    }
+  } else {
+    // printf("nothing to do. btn: %d, btn_a: %d, btn_b: %d\n", btn,
+    //        BTN_A_RELEASED(), BTN_B_RELEASED());
+  }
+}
+
+u8 loop(void) {
   u8 err = 0;
-  HUSB238_SrcPdo src_pdo = 0;
-
-  SystemInit();
-
-  funGpioInitAll();
-  funPinMode(PD2, GPIO_Speed_10MHz | GPIO_CNF_OUT_PP);
-
-  init_i2c();
-
-  tft_init();
-  err = ina226_init();
-  if (err) {
-    printf("Failed to init ina226\n\r");
-    return 1;
-  }
-
-  printf("Hello World!\n\r");
-  err = husb238_get_src_pdo(&src_pdo);
-  if (err) {
-    printf("Failed to get src_pdo\n\r");
-    return 1;
-  }
-  printf("src_pdo: %d\n\r", src_pdo);
-
-  err = husb238_set_src_pdo(HUSB238_SRC_PDO_12V);
-  if (err) {
-    printf("Failed to set src_pdo\n\r");
-    return 1;
-  }
-
-  err = husb238_go_command(HUSB238_COMMAND_REQUEST);
-  if (err) {
-    printf("Failed to go command\n\r");
-    return 1;
-  }
-  funDigitalWrite(PD2, FUN_HIGH);
-
   uint32_t frame = 0;
   u8 str_len = 0;
 
@@ -101,24 +136,82 @@ int main() {
     tmp_str[str_len + 1] = 0;
     tft_set_cursor(5, 50);
     tft_print(tmp_str);
-
-    // float current_shunt_millivolts = 0;
-    // err = ina226_shunt_voltage(&current_shunt_millivolts);
-    // if (err) {
-    //   printf("Failed to read shunt voltage\n\r");
-    //   return 1;
-    // }
-    // tft_set_cursor(5, 65);
-    // str_len = float_to_string(-current_shunt_millivolts, tmp_str, 6);
-    // tmp_str[str_len] = 'm';
-    // tmp_str[str_len + 1] = 'V';
-    // tmp_str[str_len + 2] = 0;
-    // tft_print(tmp_str);
-
-    // Delay_Ms(1000);
   }
 }
 
+int main() {
+  u8 err = 0;
+  HUSB238_SrcPdo real_src_pdo = 0;
+  HUSB238_SrcPdo target_src_pdo = 0;
+
+  SystemInit();
+
+  printf("LONG_PRESS_TIME_TICKS: %lu\n", LONG_PRESS_TIME_TICKS);
+
+  funGpioInitAll();
+
+  // PD2 is Output Control Pin
+  funPinMode(PD2, GPIO_Speed_In | GPIO_CNF_OUT_PP);
+
+  // PA1 is Btn A
+  funPinMode(PA1, GPIO_Speed_In | GPIO_CNF_IN_PUPD);
+  GPIOA->OUTDR |= GPIO_Pin_1;
+  // PA2 is Btn B
+  funPinMode(PA2, GPIO_Speed_In | GPIO_CNF_IN_PUPD);
+  GPIOA->OUTDR |= GPIO_Pin_2;
+
+  // External interrupt for PA1 and PA2
+  AFIO->EXTICR = AFIO_EXTICR_EXTI1_PA | AFIO_EXTICR_EXTI2_PA;
+  EXTI->INTENR = EXTI_INTENR_MR1 | EXTI_INTENR_MR2;
+  EXTI->RTENR = EXTI_RTENR_TR1 | EXTI_RTENR_TR2;
+  EXTI->FTENR = EXTI_FTENR_TR1 | EXTI_FTENR_TR2;
+  NVIC_EnableIRQ(EXTI7_0_IRQn);
+
+  // Init SysTick
+  SysTick->CTLR = SYSTICK_CTLR_STE | SYSTICK_CTLR_STRE | SYSTICK_CTLR_STCLK;
+
+  init_i2c();
+
+  tft_init();
+  err = ina226_init();
+  if (err) {
+    printf("Failed to init ina226\n\r");
+    return 1;
+  }
+
+  printf("Hello World!\n\r");
+  err = husb238_get_src_pdo(&real_src_pdo);
+  if (err) {
+    printf("Failed to get src_pdo\n\r");
+    return 1;
+  }
+  printf("src_pdo: %d\n\r", real_src_pdo);
+
+  funDigitalWrite(PD2, FUN_HIGH);
+
+  while (1) {
+    loop();
+
+    Delay_Ms(1000);
+    init_i2c();
+  }
+}
+
+u8 request_src_pdo(HUSB238_SrcPdo src_pdo) {
+  u8 err = husb238_set_src_pdo(HUSB238_SRC_PDO_12V);
+  if (err) {
+    printf("Failed to set src_pdo\n\r");
+    return 1;
+  }
+
+  err = husb238_go_command(HUSB238_COMMAND_REQUEST);
+  if (err) {
+    printf("Failed to go command\n\r");
+    return 2;
+  }
+
+  return 0;
+}
 u8 float_to_string(float num, char *str, u8 afterpoint) {
   int ipart = (int)num;
   float fpart = num - (float)ipart;

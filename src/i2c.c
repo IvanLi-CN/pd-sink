@@ -5,6 +5,9 @@ void init_i2c() {
   RCC->APB2PCENR |= RCC_APB2Periph_GPIOC;
   RCC->APB1PCENR |= RCC_APB1Periph_I2C1;
 
+  I2C1->CTLR1 |= I2C_CTLR1_SWRST;
+  I2C1->CTLR1 &= ~I2C_CTLR1_SWRST;
+
   // PC1 is SDA, 10MHz Output, alt func, open-drain
   GPIOC->CFGLR &= ~(0xf << (4 * 1));
   GPIOC->CFGLR |= (GPIO_Speed_10MHz | GPIO_CNF_OUT_OD_AF) << (4 * 1);
